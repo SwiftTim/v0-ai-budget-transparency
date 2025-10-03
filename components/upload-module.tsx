@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Progress } from "@/components/ui/progress"
-import { Upload, FileText, CheckCircle, AlertCircle, X } from "lucide-react"
+import { Upload, FileText, CircleCheck as CheckCircle, CircleAlert as AlertCircle, X } from "lucide-react"
 import { LoadingSpinner } from "@/components/loading-spinner"
 import { useSuccessNotification, useErrorNotification } from "@/components/toast-notifications"
 
