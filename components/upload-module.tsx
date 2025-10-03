@@ -12,6 +12,9 @@ import { Progress } from "@/components/ui/progress"
 import { Upload, FileText, CircleCheck as CheckCircle, CircleAlert as AlertCircle, X } from "lucide-react"
 import { LoadingSpinner } from "@/components/loading-spinner"
 import { useSuccessNotification, useErrorNotification } from "@/components/toast-notifications"
+import { AnalysisResults } from "@/components/analysis-results"
+import { createBudgetUpload, updateUploadStatus, createBudgetAnalysis } from "@/lib/supabase"
+import { extractTextWithOCR, analyzeWithNLP } from "@/lib/ocr-nlp-processor"
 
 export function UploadModule() {
   const [dragActive, setDragActive] = useState(false)
@@ -21,6 +24,13 @@ export function UploadModule() {
   const [county, setCounty] = useState("")
   const [year, setYear] = useState("")
   const [processingStep, setProcessingStep] = useState("")
+  const [analysisResult, setAnalysisResult] = useState<{
+    summary: string
+    keyInsights: string[]
+    transparencyScore: number
+    flaggedIssues: string[]
+    fileName: string
+  } | null>(null)
 
   const showSuccess = useSuccessNotification()
   const showError = useErrorNotification()
@@ -98,135 +108,193 @@ export function UploadModule() {
     setFiles((prev) => prev.filter((_, i) => i !== index))
   }
 
-  const simulateUpload = async () => {
+  const processUpload = async () => {
     if (!county || !year || files.length === 0) {
-      showError("Missing information", "Please select county, year, and upload at least one file.")
+      showError("Missing information", "Please upload file first, then select year and county.")
       return
     }
 
     setUploading(true)
     setProgress(0)
+    setAnalysisResult(null)
 
-    const steps = [
-      "Uploading files...",
-      "Extracting text with OCR...",
-      "Analyzing content with AI...",
-      "Generating transparency scores...",
-      "Finalizing results...",
-    ]
+    try {
+      const file = files[0]
 
-    for (let stepIndex = 0; stepIndex < steps.length; stepIndex++) {
-      setProcessingStep(steps[stepIndex])
+      setProcessingStep("Uploading to database...")
+      setProgress(10)
 
-      const stepProgress = (stepIndex / steps.length) * 100
-      const nextStepProgress = ((stepIndex + 1) / steps.length) * 100
+      const upload = await createBudgetUpload({
+        file_name: file.name,
+        file_size: file.size,
+        file_url: `uploads/${file.name}`,
+        county: county,
+        budget_year: year,
+        user_id: null,
+      })
 
-      // Animate progress within each step
-      for (let i = stepProgress; i <= nextStepProgress; i += 2) {
-        setProgress(i)
-        await new Promise((resolve) => setTimeout(resolve, 50))
-      }
+      if (!upload) throw new Error("Failed to create upload record")
 
-      // Pause between steps
-      await new Promise((resolve) => setTimeout(resolve, 300))
+      await updateUploadStatus(upload.id, "processing")
+      setProgress(25)
+
+      setProcessingStep("Extracting text with OCR...")
+      await new Promise((resolve) => setTimeout(resolve, 1000))
+      const extractedText = await extractTextWithOCR(file)
+      setProgress(50)
+
+      setProcessingStep("Analyzing content with NLP...")
+      await new Promise((resolve) => setTimeout(resolve, 1000))
+      const analysis = await analyzeWithNLP(extractedText)
+      setProgress(75)
+
+      setProcessingStep("Saving analysis results...")
+      await createBudgetAnalysis({
+        upload_id: upload.id,
+        extracted_text: extractedText,
+        summary: analysis.summary,
+        key_insights: analysis.keyInsights,
+        transparency_score: analysis.transparencyScore,
+        flagged_issues: analysis.flaggedIssues,
+      })
+
+      await updateUploadStatus(upload.id, "completed")
+      setProgress(100)
+
+      await new Promise((resolve) => setTimeout(resolve, 500))
+
+      setAnalysisResult({
+        summary: analysis.summary,
+        keyInsights: analysis.keyInsights,
+        transparencyScore: analysis.transparencyScore,
+        flaggedIssues: analysis.flaggedIssues,
+        fileName: file.name,
+      })
+
+      showSuccess("Analysis complete", "Budget report has been analyzed successfully.")
+    } catch (error) {
+      showError("Upload failed", error instanceof Error ? error.message : "An error occurred during processing.")
+    } finally {
+      setUploading(false)
+      setProgress(0)
+      setProcessingStep("")
+      setFiles([])
     }
-
-    setUploading(false)
-    setProgress(0)
-    setProcessingStep("")
-    setFiles([])
-    setCounty("")
-    setYear("")
-
-    showSuccess("Upload successful", `${files.length} document(s) uploaded and processed successfully.`)
   }
 
   return (
     <div className="space-y-6">
-      <div className="grid gap-6 md:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>Document Information</CardTitle>
-            <CardDescription>Provide details about the budget documents</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="county">County</Label>
-              <Select value={county} onValueChange={setCounty} disabled={uploading}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select county" />
-                </SelectTrigger>
-                <SelectContent>
-                  {counties.map((c) => (
-                    <SelectItem key={c} value={c}>
-                      {c}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="year">Budget Year</Label>
-              <Select value={year} onValueChange={setYear} disabled={uploading}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select year" />
-                </SelectTrigger>
-                <SelectContent>
-                  {years.map((y) => (
-                    <SelectItem key={y} value={y}>
-                      {y}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </CardContent>
-        </Card>
+      {analysisResult ? (
+        <>
+          <AnalysisResults
+            summary={analysisResult.summary}
+            keyInsights={analysisResult.keyInsights}
+            transparencyScore={analysisResult.transparencyScore}
+            flaggedIssues={analysisResult.flaggedIssues}
+            county={county}
+            budgetYear={year}
+            fileName={analysisResult.fileName}
+          />
+          <div className="flex justify-center">
+            <Button
+              onClick={() => {
+                setAnalysisResult(null)
+                setCounty("")
+                setYear("")
+              }}
+              variant="outline"
+            >
+              Analyze Another Report
+            </Button>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="grid gap-6 md:grid-cols-2">
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Processing Pipeline</CardTitle>
-            <CardDescription>AI-powered document analysis steps</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-3">
-              <div className="flex items-center space-x-3">
-                <div className="w-8 h-8 rounded-full bg-chart-1/10 flex items-center justify-center">
-                  <FileText className="h-4 w-4 text-chart-1" />
+            <Card>
+              <CardHeader>
+                <CardTitle>Document Information</CardTitle>
+                <CardDescription>Select year and county after uploading</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="year">Budget Year</Label>
+                  <Select value={year} onValueChange={setYear} disabled={uploading || files.length === 0}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select year" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {years.map((y) => (
+                        <SelectItem key={y} value={y}>
+                          {y}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
-                <div>
-                  <p className="font-medium text-sm">OCR Text Extraction</p>
-                  <p className="text-xs text-muted-foreground">Extract text from PDF documents</p>
+                <div className="space-y-2">
+                  <Label htmlFor="county">County</Label>
+                  <Select value={county} onValueChange={setCounty} disabled={uploading || files.length === 0}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select county" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {counties.map((c) => (
+                        <SelectItem key={c} value={c}>
+                          {c}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
-              </div>
-              <div className="flex items-center space-x-3">
-                <div className="w-8 h-8 rounded-full bg-chart-2/10 flex items-center justify-center">
-                  <CheckCircle className="h-4 w-4 text-chart-2" />
-                </div>
-                <div>
-                  <p className="font-medium text-sm">AI Summarization</p>
-                  <p className="text-xs text-muted-foreground">Generate key insights and summaries</p>
-                </div>
-              </div>
-              <div className="flex items-center space-x-3">
-                <div className="w-8 h-8 rounded-full bg-chart-3/10 flex items-center justify-center">
-                  <AlertCircle className="h-4 w-4 text-chart-3" />
-                </div>
-                <div>
-                  <p className="font-medium text-sm">Transparency Analysis</p>
-                  <p className="text-xs text-muted-foreground">Identify transparency issues</p>
-                </div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+              </CardContent>
+            </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Upload Budget Report Controller</CardTitle>
-          <CardDescription>Upload PDF files up to 100MB for OCR and NLP analysis</CardDescription>
-        </CardHeader>
+            <Card>
+              <CardHeader>
+                <CardTitle>Processing Pipeline</CardTitle>
+                <CardDescription>AI-powered document analysis steps</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-3">
+                  <div className="flex items-center space-x-3">
+                    <div className="w-8 h-8 rounded-full bg-chart-1/10 flex items-center justify-center">
+                      <FileText className="h-4 w-4 text-chart-1" />
+                    </div>
+                    <div>
+                      <p className="font-medium text-sm">OCR Text Extraction</p>
+                      <p className="text-xs text-muted-foreground">Extract text from PDF documents</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center space-x-3">
+                    <div className="w-8 h-8 rounded-full bg-chart-2/10 flex items-center justify-center">
+                      <CheckCircle className="h-4 w-4 text-chart-2" />
+                    </div>
+                    <div>
+                      <p className="font-medium text-sm">AI Summarization</p>
+                      <p className="text-xs text-muted-foreground">Generate key insights and summaries</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center space-x-3">
+                    <div className="w-8 h-8 rounded-full bg-chart-3/10 flex items-center justify-center">
+                      <AlertCircle className="h-4 w-4 text-chart-3" />
+                    </div>
+                    <div>
+                      <p className="font-medium text-sm">Transparency Analysis</p>
+                      <p className="text-xs text-muted-foreground">Identify transparency issues</p>
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Step 1: Upload Budget Report</CardTitle>
+              <CardDescription>Upload PDF file up to 100MB, then select year and county</CardDescription>
+            </CardHeader>
         <CardContent>
           <div
             className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
@@ -291,27 +359,29 @@ export function UploadModule() {
             </div>
           )}
 
-          <div className="mt-6 flex justify-end">
-            <Button
-              onClick={simulateUpload}
-              disabled={uploading || files.length === 0 || !county || !year}
-              className="min-w-32"
-            >
-              {uploading ? (
-                <>
-                  <LoadingSpinner size="sm" className="mr-2" />
-                  Processing
-                </>
-              ) : (
-                <>
-                  <Upload className="h-4 w-4 mr-2" />
-                  Upload & Process
-                </>
-              )}
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
+            <div className="mt-6 flex justify-end">
+              <Button
+                onClick={processUpload}
+                disabled={uploading || files.length === 0 || !county || !year}
+                className="min-w-32"
+              >
+                {uploading ? (
+                  <>
+                    <LoadingSpinner size="sm" className="mr-2" />
+                    Processing
+                  </>
+                ) : (
+                  <>
+                    <Upload className="h-4 w-4 mr-2" />
+                    Analyze Report
+                  </>
+                )}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </>
+      )}
     </div>
   )
 }
