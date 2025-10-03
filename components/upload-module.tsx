@@ -60,10 +60,17 @@ export function UploadModule() {
 
       const droppedFiles = Array.from(e.dataTransfer.files).filter((file) => file.type === "application/pdf")
 
-      if (droppedFiles.length > 0) {
-        setFiles((prev) => [...prev, ...droppedFiles])
-        showSuccess("Files added", `${droppedFiles.length} PDF file(s) ready for upload`)
-      } else {
+      const oversizedFiles = droppedFiles.filter((file) => file.size > 100 * 1024 * 1024)
+      const validFiles = droppedFiles.filter((file) => file.size <= 100 * 1024 * 1024)
+
+      if (oversizedFiles.length > 0) {
+        showError("File too large", `Some files exceed 100MB limit and were not added.`)
+      }
+
+      if (validFiles.length > 0) {
+        setFiles((prev) => [...prev, ...validFiles])
+        showSuccess("Files added", `${validFiles.length} budget report(s) ready for upload`)
+      } else if (droppedFiles.length > 0 && oversizedFiles.length === 0) {
         showError("Invalid file type", "Please upload PDF files only.")
       }
     },
@@ -73,9 +80,16 @@ export function UploadModule() {
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
       const selectedFiles = Array.from(e.target.files).filter((file) => file.type === "application/pdf")
-      if (selectedFiles.length > 0) {
-        setFiles((prev) => [...prev, ...selectedFiles])
-        showSuccess("Files selected", `${selectedFiles.length} PDF file(s) ready for upload`)
+      const oversizedFiles = selectedFiles.filter((file) => file.size > 100 * 1024 * 1024)
+      const validFiles = selectedFiles.filter((file) => file.size <= 100 * 1024 * 1024)
+
+      if (oversizedFiles.length > 0) {
+        showError("File too large", `${oversizedFiles.length} file(s) exceed 100MB limit and were not added.`)
+      }
+
+      if (validFiles.length > 0) {
+        setFiles((prev) => [...prev, ...validFiles])
+        showSuccess("Files selected", `${validFiles.length} budget report(s) ready for upload`)
       }
     }
   }
@@ -210,8 +224,8 @@ export function UploadModule() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Upload Documents</CardTitle>
-          <CardDescription>Drag and drop PDF files or click to browse</CardDescription>
+          <CardTitle>Upload Budget Report Controller</CardTitle>
+          <CardDescription>Upload PDF files up to 100MB for OCR and NLP analysis</CardDescription>
         </CardHeader>
         <CardContent>
           <div
@@ -225,8 +239,8 @@ export function UploadModule() {
           >
             <Upload className="mx-auto h-12 w-12 text-muted-foreground mb-4" />
             <div className="space-y-2">
-              <p className="text-lg font-medium">Drop PDF files here</p>
-              <p className="text-sm text-muted-foreground">or click to browse your files</p>
+              <p className="text-lg font-medium">Drop budget report files here</p>
+              <p className="text-sm text-muted-foreground">Maximum file size: 100MB per file</p>
               <Input
                 type="file"
                 multiple
